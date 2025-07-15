@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="timer" id="timer">
+    <i class="fas fa-clock"></i> <span id="time-left">{{ question.time_limit }}</span>s
+</div>
+
+<div class="quiz-container">
+    <div class="mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="text-white">Question {{ question.current }} of {{ question.total }}</h5>
+            <span class="badge bg-info fs-6">{{ question.current }}/{{ question.total }}</span>
+        </div>
+        <div class="progress progress-bar-custom">
+            <div class="progress-bar bg-success" role="progressbar" 
+                 style="width: {{ (question.current / question.total) * 100 }}%"></div>
+        </div>
+    </div>
+
+    <div class="question-card">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="text-muted mb-0">Question {{ question.current }}</h6>
+            <span class="badge bg-primary">{{ question.time_limit }}s</span>
+        </div>
+        
+        <h4 class="mb-4">{{ question.question }}</h4>
+        
+        <div class="options-container">
+            {% for option in question.options %}
+            <button class="btn option-btn" data-option="{{ option[0] }}" onclick="selectOption(this)">
+                <i class="fas fa-circle me-2" style="font-size: 8px;"></i>
+                {{ option }}
+            </button>
+            {% endfor %}
+        </div>
+        
+        <div class="text-center mt-4">
+            <button id="submit-btn" class="btn btn-primary btn-lg btn-custom" onclick="submitAnswer()" disabled>
+                <i class="fas fa-check"></i> Submit Answer
+            </button>
+            <button class="btn btn-secondary btn-lg btn-custom ms-2" onclick="skipQuestion()">
+                <i class="fas fa-forward"></i> Skip
+            </button>
+        </div>
+        
+        <div class="text-center mt-3">
+            <small class="text-muted">
+                <i class="fas fa-lightbulb"></i> Select an option and click Submit Answer
+            </small>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let timeLeft = {{ question.time_limit }};
+let timer;
+let questionStartTime = new Date().getTime();
+let selectedAnswer = null;
+
+function startTimer() {
+    timer = setInterval(function() {
+        timeLeft--;
+        document.getElementById('time-left').textContent = timeLeft;
+        
+        // Change timer color as time runs out
+        const timerElement = document.getElementById('timer');
+        if (timeLeft <= 10) {
+            timerElement.style.background = '#dc3545';
+            timerElement.style.animation = 'pulse 1s infinite';
+        } else if (timeLeft <= 30) {
+            timerElement.style.background = '#fd7e14';
+        }
+        
+        if (timeLeft <= 0) {
+            clearInterval(timer);
+            timeUp();
+        }
+    }, 1000);
+}
+
+function selectOption(button) {
+    // Remove selection from all buttons
+    const allButtons = document.querySelectorAll('.option-btn');
+    allButtons.forEach(btn => btn.classList.remove('selected'));
+    
+    // Add selection to clicked button
+    button.classList.add('selected');
+    selectedAnswer = button.getAttribute('data-option');
+    
+    // Enable submit button
+    document.getElementById('submit-btn').disabled = false;
+}
+
+function submitAnswer() {
+    if (!selectedAnswer) {
+        alert('Please select an answer first!');
+        return;
+    }
+    
+    clearInterval(timer);
+    const timeTaken = (new Date().getTime() - questionStartTime) / 1000;
+    
+    // Send answer to server
+    fetch('/submit_answer', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            answer: selectedAnswer,
+            time_taken: timeTaken
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.completed) {
+            window.location.href = data.redirect;
+        } else {
+            window.location.href = data.redirect;
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    });
+}
+
+function skipQuestion() {
+    if (confirm('Are you sure you want to skip this question?')) {
+        clearInterval(timer);
+        const timeTaken = (new Date().getTime() - questionStartTime) / 1000;
+        
+        fetch('/submit_answer', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                answer: 'SKIPPED',
+                time_taken: timeTaken
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.completed) {
+                window.location.href = data.redirect;
+            } else {
+                window.location.href = data.redirect;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('An error occurred. Please try again.');
+        });
+    }
+}
+
+function timeUp() {
+    alert('Time is up! Moving to next question...');
+    const timeTaken = {{ question.time_limit }};
+    
+    fetch('/submit_answer', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            answer: 'TIMEOUT',
+            time_taken: timeTaken
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.completed) {
+            window.location.href = data.redirect;
+        } else {
+            window.location.href = data.redirect;
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    });
+}
+
+// Start timer when page loads
+window.onload = function() {
+    startTimer();
+};
+
+// Add pulse animation CSS
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
+    }
+`;
+document.head.appendChild(style);
+</script>
+{% endblock %}

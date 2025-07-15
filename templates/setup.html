@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="quiz-container">
+    <div class="question-card">
+        <h2 class="text-center mb-4">
+            <i class="fas fa-cog"></i> Quiz Setup
+        </h2>
+        
+        {% if error %}
+        <div class="alert alert-danger" role="alert">
+            <i class="fas fa-exclamation-triangle"></i> {{ error }}
+        </div>
+        {% endif %}
+        
+        <form method="POST">
+            <div class="mb-4">
+                <label for="pdf_path" class="form-label">
+                    <i class="fas fa-file-pdf"></i> PDF File Path
+                </label>
+                <input type="text" class="form-control" id="pdf_path" name="pdf_path" 
+                       placeholder="Enter the full path to your PDF file (e.g., C:\Users\username\Documents\quiz.pdf)"
+                       required>
+                <div class="form-text">
+                    <i class="fas fa-info-circle"></i> 
+                    Enter the complete path to your PDF file. Make sure the file exists and is accessible.
+                </div>
+            </div>
+            
+            <div class="mb-4">
+                <label for="time_per_question" class="form-label">
+                    <i class="fas fa-clock"></i> Time per Question (seconds)
+                </label>
+                <input type="number" class="form-control" id="time_per_question" name="time_per_question" 
+                       value="60" min="10" max="300">
+                <div class="form-text">Recommended: 60 seconds for numerical problems, 30 seconds for simple questions</div>
+            </div>
+            
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i>
+                <strong>Quiz Information:</strong>
+                <ul class="mb-0 mt-2">
+                    <li>Questions will be automatically extracted from your PDF file</li>
+                    <li>Timer starts as soon as you see each question</li>
+                    <li>You can skip questions if needed</li>
+                    <li>Results and explanations will be shown at the end</li>
+                    <li>Your progress will be saved during the quiz</li>
+                </ul>
+            </div>
+            
+            <div class="alert alert-warning">
+                <i class="fas fa-format-list-numbered"></i>
+                <strong>Expected PDF Format:</strong>
+                <ul class="mb-0 mt-2">
+                    <li>Questions: Q1., Q2., Q3., etc.</li>
+                    <li>Options: A., B., C., D.</li>
+                    <li>Answers: Answer: Option C (or Answer: C)</li>
+                    <li>Explanations: Explanation: [optional]</li>
+                </ul>
+            </div>
+            
+            <div class="text-center">
+                <button type="submit" class="btn btn-success btn-lg btn-custom">
+                    <i class="fas fa-rocket"></i> Load Quiz & Start
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
