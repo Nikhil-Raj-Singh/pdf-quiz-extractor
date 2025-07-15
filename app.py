@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import PyPDF2
-import fitz  # PyMuPDF for image extraction
 import re
 import json
 import os
@@ -19,23 +18,23 @@ class QuizManager:
         self.current_question = 0
         
     def extract_content_from_pdf(self, pdf_path):
-        """Extract text and images from PDF"""
-        text_content = ""
-        
-        # Extract text using PyPDF2
-        try:
-            with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                print(f"Processing {len(pdf_reader.pages)} pages...")
-                for page_num, page in enumerate(pdf_reader.pages):
-                    page_text = page.extract_text()
-                    text_content += page_text
-                    print(f"Processed page {page_num + 1}")
-        except Exception as e:
-            print(f"Error reading PDF text: {e}")
-            return None
-        
-        return text_content
+    """Extract text from PDF"""
+    text_content = ""
+    
+    # Extract text using PyPDF2
+    try:
+        with open(pdf_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            print(f"Processing {len(pdf_reader.pages)} pages...")
+            for page_num, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                text_content += page_text
+                print(f"Processed page {page_num + 1}")
+    except Exception as e:
+        print(f"Error reading PDF text: {e}")
+        return None
+    
+    return text_content
     
     def parse_questions(self, text_content):
         """Parse questions, options, and answers separately"""
