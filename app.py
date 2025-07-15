@@ -1,229 +1,265 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify
 import PyPDF2
 import re
-import json
 import os
-import base64
-from io import BytesIO
-import time
-import uuid
+import secrets
 from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-for-sessions-change-this'
+app.secret_key = secrets.token_hex(16)
 
-class QuizManager:
-    def __init__(self):
-        self.questions = []
-        self.current_question = 0
-        
-    def extract_content_from_pdf(self, pdf_path):
+# Configuration
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf'}
+
+# Create upload folder if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_text_from_pdf(pdf_path):
     """Extract text from PDF"""
-    text_content = ""
-    
-    # Extract text using PyPDF2
     try:
         with open(pdf_path, 'rb') as file:
             pdf_reader = PyPDF2.PdfReader(file)
-            print(f"Processing {len(pdf_reader.pages)} pages...")
-            for page_num, page in enumerate(pdf_reader.pages):
-                page_text = page.extract_text()
-                text_content += page_text
-                print(f"Processed page {page_num + 1}")
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+        return text
     except Exception as e:
-        print(f"Error reading PDF text: {e}")
-        return None
-    
-    return text_content
-    
-    def parse_questions(self, text_content):
-        """Parse questions, options, and answers separately"""
-        questions = []
-        
-        # Clean the text
-        text_content = re.sub(r'\s+', ' ', text_content)
-        
-        # Split by questions (Q1., Q2., etc.)
-        question_blocks = re.split(r'(Q\d+\.)', text_content)
-        
-        for i in range(1, len(question_blocks), 2):
-            if i + 1 < len(question_blocks):
-                question_header = question_blocks[i]
-                question_content = question_blocks[i + 1]
-                
-                # Extract question text (before options)
-                question_match = re.search(r'(.*?)(?=A\.|Options:|$)', question_content, re.DOTALL)
-                if question_match:
-                    question_text = question_header + " " + question_match.group(1).strip()
-                    
-                    # Extract options
-                    options = []
-                    option_pattern = r'([A-D]\..*?)(?=[A-D]\.|Answer:|Explanation:|Q\d+\.|$)'
-                    option_matches = re.findall(option_pattern, question_content, re.DOTALL)
-                    
-                    for option in option_matches:
-                        cleaned_option = re.sub(r'\s+', ' ', option.strip())
-                        # Remove answer and explanation from option
-                        cleaned_option = re.sub(r'Answer.*$', '', cleaned_option, flags=re.IGNORECASE)
-                        cleaned_option = re.sub(r'Explanation.*$', '', cleaned_option, flags=re.IGNORECASE)
-                        if cleaned_option and len(cleaned_option) > 3:
-                            options.append(cleaned_option)
-                    
-                    # Extract correct answer
-                    answer_match = re.search(r'Answer:\s*(?:Option\s*)?([A-D])', question_content, re.IGNORECASE)
-                    correct_answer = answer_match.group(1).upper() if answer_match else None
-                    
-                    # Extract explanation
-                    explanation_match = re.search(r'Explanation:(.*?)(?=Q\d+\.|$)', question_content, re.DOTALL)
-                    explanation = explanation_match.group(1).strip() if explanation_match else ""
-                    explanation = re.sub(r'\s+', ' ', explanation)
-                    
-                    if len(options) >= 4 and correct_answer:
-                        questions.append({
-                            'id': len(questions) + 1,
-                            'question': question_text,
-                            'options': options[:4],  # Take only first 4 options
-                            'correct_answer': correct_answer,
-                            'explanation': explanation
-                        })
-        
-        return questions
-    
-    def load_quiz(self, pdf_path):
-        """Load quiz from PDF"""
-        if not os.path.exists(pdf_path):
-            print(f"PDF file not found: {pdf_path}")
-            return False
-            
-        text_content = self.extract_content_from_pdf(pdf_path)
-        if text_content is None:
-            return False
-            
-        self.questions = self.parse_questions(text_content)
-        print(f"Loaded {len(self.questions)} questions")
-        return len(self.questions) > 0
+        print(f"Error extracting text from PDF: {str(e)}")
+        return ""
 
-quiz_manager = QuizManager()
+def parse_questions(text):
+    """Parse questions from extracted text"""
+    questions = []
+    
+    # Pattern to match questions (adjust based on your PDF format)
+    # This pattern looks for numbered questions followed by options A, B, C, D
+    question_pattern = r'(\d+)\.\s*(.+?)(?=\n(?:A\)|a\)|\d+\.|$))'
+    option_pattern = r'([A-Da-d])\)\s*(.+?)(?=\n(?:[A-Da-d]\)|\d+\.|$))'
+    
+    # Find all questions
+    question_matches = re.findall(question_pattern, text, re.DOTALL)
+    
+    for match in question_matches:
+        question_num = match[0]
+        question_text = match[1].strip()
+        
+        # Find options for this question
+        question_section = text[text.find(f"{question_num}. {question_text}"):text.find(f"{int(question_num)+1}." if int(question_num) < 100 else "END")]
+        
+        options = []
+        option_matches = re.findall(option_pattern, question_section, re.DOTALL)
+        
+        for opt_match in option_matches:
+            option_letter = opt_match[0].upper()
+            option_text = opt_match[1].strip()
+            options.append({
+                'letter': option_letter,
+                'text': option_text
+            })
+        
+        if len(options) >= 2:  # Only include questions with at least 2 options
+            questions.append({
+                'number': int(question_num),
+                'text': question_text,
+                'options': options,
+                'correct_answer': None  # Will be set based on answer key or user input
+            })
+    
+    return questions
+
+def parse_answer_key(text):
+    """Parse answer key from text"""
+    answer_key = {}
+    
+    # Pattern to match answer key (adjust based on your format)
+    # Looks for patterns like "1. A", "2. B", etc.
+    answer_pattern = r'(\d+)\.\s*([A-Da-d])'
+    
+    # Also try patterns like "1) A", "2) B"
+    answer_pattern_alt = r'(\d+)\)\s*([A-Da-d])'
+    
+    matches = re.findall(answer_pattern, text, re.IGNORECASE)
+    if not matches:
+        matches = re.findall(answer_pattern_alt, text, re.IGNORECASE)
+    
+    for match in matches:
+        question_num = int(match[0])
+        correct_answer = match[1].upper()
+        answer_key[question_num] = correct_answer
+    
+    return answer_key
 
 @app.route('/')
-def index():
+def home():
     return render_template('index.html')
 
-@app.route('/setup', methods=['GET', 'POST'])
-def setup():
-    if request.method == 'POST':
-        # Get PDF path from form
-        pdf_path = request.form.get('pdf_path')
-        
-        if not pdf_path or not os.path.exists(pdf_path):
-            return render_template('setup.html', error="Please provide a valid PDF file path")
-        
-        # Load quiz
-        if quiz_manager.load_quiz(pdf_path):
-            session['quiz_id'] = str(uuid.uuid4())
-            session['current_question'] = 0
-            session['score'] = 0
-            session['answers'] = []
-            session['start_time'] = time.time()
-            session['time_per_question'] = int(request.form.get('time_per_question', 60))
-            session['total_questions'] = len(quiz_manager.questions)
-            
-            return redirect(url_for('quiz'))
-        else:
-            return render_template('setup.html', error="Failed to load quiz from PDF. Please check the file format.")
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
     
-    return render_template('setup.html')
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if file and allowed_file(file.filename):
+        filename = f"quiz_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(filepath)
+        
+        # Extract text and parse questions
+        text = extract_text_from_pdf(filepath)
+        if not text:
+            return jsonify({'error': 'Could not extract text from PDF'}), 400
+        
+        questions = parse_questions(text)
+        if not questions:
+            return jsonify({'error': 'No questions found in PDF'}), 400
+        
+        # Try to extract answer key
+        answer_key = parse_answer_key(text)
+        
+        # Set correct answers if found
+        for question in questions:
+            if question['number'] in answer_key:
+                question['correct_answer'] = answer_key[question['number']]
+        
+        # Store in session
+        session['questions'] = questions
+        session['current_question'] = 0
+        session['user_answers'] = {}
+        session['quiz_started'] = False
+        
+        # Clean up uploaded file
+        os.remove(filepath)
+        
+        return jsonify({
+            'success': True,
+            'total_questions': len(questions),
+            'questions_with_answers': len([q for q in questions if q['correct_answer']])
+        })
+    
+    return jsonify({'error': 'Invalid file type'}), 400
+
+@app.route('/quiz_setup')
+def quiz_setup():
+    if 'questions' not in session:
+        return redirect(url_for('home'))
+    
+    questions = session['questions']
+    return render_template('quiz_setup.html', 
+                         total_questions=len(questions),
+                         questions_with_answers=len([q for q in questions if q['correct_answer']]))
+
+@app.route('/start_quiz', methods=['POST'])
+def start_quiz():
+    if 'questions' not in session:
+        return redirect(url_for('home'))
+    
+    # Get quiz settings
+    time_per_question = int(request.form.get('time_per_question', 30))
+    
+    # Initialize quiz session
+    session['quiz_started'] = True
+    session['current_question'] = 0
+    session['user_answers'] = {}
+    session['time_per_question'] = time_per_question
+    session['quiz_start_time'] = datetime.now().isoformat()
+    
+    return redirect(url_for('quiz'))
 
 @app.route('/quiz')
 def quiz():
-    if 'quiz_id' not in session:
-        return redirect(url_for('setup'))
+    if 'questions' not in session or not session.get('quiz_started', False):
+        return redirect(url_for('home'))
     
     current_q = session['current_question']
-    if current_q >= len(quiz_manager.questions):
+    questions = session['questions']
+    
+    if current_q >= len(questions):
         return redirect(url_for('results'))
     
-    question = quiz_manager.questions[current_q]
-    
-    # Don't send correct answer or explanation to frontend
-    question_data = {
-        'id': question['id'],
-        'question': question['question'],
-        'options': question['options'],
-        'current': current_q + 1,
-        'total': len(quiz_manager.questions),
-        'time_limit': session['time_per_question']
-    }
-    
-    return render_template('quiz.html', question=question_data)
+    question = questions[current_q]
+    return render_template('quiz.html', 
+                         question=question,
+                         current=current_q + 1,
+                         total=len(questions),
+                         time_per_question=session.get('time_per_question', 30))
 
 @app.route('/submit_answer', methods=['POST'])
 def submit_answer():
-    if 'quiz_id' not in session:
-        return jsonify({'error': 'No active quiz'})
-    
-    data = request.json
-    user_answer = data.get('answer')
-    time_taken = data.get('time_taken', 0)
+    if 'questions' not in session or not session.get('quiz_started', False):
+        return jsonify({'error': 'Quiz not started'}), 400
     
     current_q = session['current_question']
-    if current_q >= len(quiz_manager.questions):
-        return jsonify({'error': 'Quiz completed'})
+    answer = request.form.get('answer')
     
-    question = quiz_manager.questions[current_q]
+    if answer:
+        session['user_answers'][current_q] = answer
     
-    # Check if answer is correct
-    is_correct = user_answer == question['correct_answer']
-    if is_correct:
-        session['score'] += 1
-    
-    # Store answer details
-    session['answers'].append({
-        'question_id': question['id'],
-        'question_text': question['question'],
-        'options': question['options'],
-        'user_answer': user_answer,
-        'correct_answer': question['correct_answer'],
-        'is_correct': is_correct,
-        'time_taken': time_taken,
-        'explanation': question['explanation']
-    })
-    
-    # Update session
-    session['current_question'] += 1
+    session['current_question'] = current_q + 1
     
     # Check if quiz is complete
-    if session['current_question'] >= len(quiz_manager.questions):
-        session['end_time'] = time.time()
-        return jsonify({'completed': True, 'redirect': url_for('results')})
+    if session['current_question'] >= len(session['questions']):
+        return jsonify({'redirect': url_for('results')})
     
-    return jsonify({'completed': False, 'redirect': url_for('quiz')})
+    return jsonify({'redirect': url_for('quiz')})
 
 @app.route('/results')
 def results():
-    if 'quiz_id' not in session:
-        return redirect(url_for('setup'))
+    if 'questions' not in session or not session.get('quiz_started', False):
+        return redirect(url_for('home'))
     
-    total_time = session.get('end_time', time.time()) - session['start_time']
-    score = session['score']
-    total_questions = session['total_questions']
-    accuracy = (score / total_questions) * 100 if total_questions > 0 else 0
+    questions = session['questions']
+    user_answers = session.get('user_answers', {})
     
-    results_data = {
-        'score': score,
-        'total_questions': total_questions,
-        'accuracy': round(accuracy, 1),
-        'total_time': round(total_time, 1),
-        'avg_time': round(total_time / total_questions, 1) if total_questions > 0 else 0,
-        'answers': session['answers']
-    }
+    # Calculate results
+    total_questions = len(questions)
+    answered_questions = len(user_answers)
+    correct_answers = 0
     
-    return render_template('results.html', results=results_data)
+    detailed_results = []
+    
+    for i, question in enumerate(questions):
+        user_answer = user_answers.get(i, None)
+        correct_answer = question.get('correct_answer', None)
+        
+        is_correct = False
+        if user_answer and correct_answer:
+            is_correct = user_answer.upper() == correct_answer.upper()
+            if is_correct:
+                correct_answers += 1
+        
+        detailed_results.append({
+            'question': question,
+            'user_answer': user_answer,
+            'correct_answer': correct_answer,
+            'is_correct': is_correct,
+            'question_number': i + 1
+        })
+    
+    # Calculate percentage
+    if total_questions > 0:
+        percentage = (correct_answers / total_questions) * 100
+    else:
+        percentage = 0
+    
+    return render_template('results.html',
+                         total_questions=total_questions,
+                         answered_questions=answered_questions,
+                         correct_answers=correct_answers,
+                         percentage=round(percentage, 2),
+                         detailed_results=detailed_results)
 
-@app.route('/restart')
-def restart():
+@app.route('/reset')
+def reset_quiz():
+    # Clear session
     session.clear()
-    return redirect(url_for('index'))
+    return redirect(url_for('home'))
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
